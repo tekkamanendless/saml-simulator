@@ -1,11 +1,18 @@
 package samlsimulator
 
 import (
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/base64"
 	"fmt"
 	"html"
+	"math/big"
 	"net/http"
 	"net/url"
+	"sort"
+	"time"
 
 	"github.com/crewjam/saml"
 	"github.com/sirupsen/logrus"
@@ -162,6 +169,8 @@ window.addEventListener('load', e => {
 
 		showError(false);
 
+		document.querySelector('#submit').disabled = true;
+
 		// TODO TODO TODO
 	});
 });
@@ -218,11 +227,51 @@ function showError(message) {
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+			return
 		}
+
+		// generate key
+		privatekey, err := rsa.GenerateKey(rand.Reader, 2048)
+		if err != nil {
+			logrus.Errorf("Could not generate RSA key: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+			return
+		}
+
+		template := x509.Certificate{
+			SerialNumber: big.NewInt(1),
+			Subject: pkix.Name{
+				Organization: []string{"Example Dot Com"},
+			},
+			NotBefore: time.Now(),
+			NotAfter:  time.Now().Add(365 * 24 * time.Hour),
+
+			KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
+			ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+			BasicConstraintsValid: true,
+		}
+
+		derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privatekey.PublicKey, privatekey)
+		if err != nil {
+			logrus.Errorf("Failed to create certificate: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+			return
+		}
+
+		c, err := x509.ParseCertificate(derBytes)
+		if err != nil {
+			logrus.Errorf("Failed to parse certificate: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+			return
+		}
+
 		samlIDP := saml.IdentityProvider{
-			//Key:         opts.Key,
-			Logger: logrus.StandardLogger(),
-			//Certificate: opts.Certificate,
+			Key:         &privatekey,
+			Logger:      logrus.StandardLogger(),
+			Certificate: c,
 			//MetadataURL: metadataURL,
 			SSOURL: *ssoURL,
 		}
@@ -230,8 +279,26 @@ function showError(message) {
 	})
 
 	s.handler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		logrus.Infof("Request: %s %s", r.Method, r.URL)
-		logrus.Infof("Path: %s", r.URL.Path)
+		ctx := r.Context()
+
+		logrus.WithContext(ctx).Infof("Request: %s %s", r.Method, r.URL)
+		logrus.WithContext(ctx).Infof("Path: %s", r.URL.Path)
+
+		{
+			logrus.WithContext(ctx).Debugf("URL: %v", r.URL)
+			logrus.WithContext(ctx).Debugf("Host: %s", r.Host)
+			headers := []string{}
+			for key := range r.Header {
+				headers = append(headers, key)
+			}
+			sort.Strings(headers)
+			logrus.WithContext(ctx).Debugf("Headers: (%d)", len(headers))
+			for _, key := range headers {
+				for _, value := range r.Header.Values(key) {
+					logrus.WithContext(ctx).Debugf("* %s: %v", key, value)
+				}
+			}
+		}
 
 		mux.ServeHTTP(w, r)
 	})
