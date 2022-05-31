@@ -63,8 +63,8 @@ func createIDP(r *http.Request, seed int64, ssoURL url.URL) (*saml.IdentityProvi
 		Logger:      logrus.StandardLogger(),
 		Certificate: c,
 		SSOURL:      ssoURL,
-		//MetadataURL: metadataURL,
-		//LogoutURL: logoutURL,
+		//MetadataURL: metadataURL, // TODO
+		//LogoutURL: logoutURL, // TODO
 	}
 	return &samlIDP, nil
 }
