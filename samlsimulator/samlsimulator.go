@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"sort"
+	"strings"
 
 	"github.com/crewjam/saml"
 	"github.com/sirupsen/logrus"
@@ -37,7 +38,7 @@ func New() (*Simulator, error) {
 
 		// TODO TODO TODO
 	})
-	mux.HandleFunc("/sso", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		err := r.ParseForm()
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -46,7 +47,7 @@ func New() (*Simulator, error) {
 
 		validPassword := r.Form.Get("validPassword")
 
-		ssoURL, err := url.Parse("/sso")
+		ssoURL, err := url.Parse("/login")
 		if err != nil {
 			logrus.Errorf("Could not parse SSO URL: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -62,19 +63,79 @@ func New() (*Simulator, error) {
 			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
 			return
 		}
+
+		actionURL := "https://bad-saml-target.example.com/sorry"
+		var samlRequest string
+		var relayState string
 		samlIDPAuthenticationRequest, err := saml.NewIdpAuthnRequest(samlIDP, r)
 		if err != nil {
-			logrus.Errorf("Could not parse IDP request: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
-			return
+			logrus.Warnf("Could not parse IDP request: %v", err)
+			/*
+				logrus.Errorf("Could not parse IDP request: %v", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+				return
+			*/
+		} else {
+			//actionURL = samlIDPAuthenticationRequest.IDP.SSOURL.String()
+			if samlIDPAuthenticationRequest.ACSEndpoint != nil && samlIDPAuthenticationRequest.ACSEndpoint.Location != "" {
+				actionURL = samlIDPAuthenticationRequest.ACSEndpoint.Location
+			}
+			samlRequest = base64.StdEncoding.EncodeToString(samlIDPAuthenticationRequest.RequestBuffer)
+			relayState = samlIDPAuthenticationRequest.RelayState
 		}
 
-		actionURL := samlIDPAuthenticationRequest.IDP.SSOURL.String()
-		samlRequest := base64.StdEncoding.EncodeToString(samlIDPAuthenticationRequest.RequestBuffer)
-		relayState := samlIDPAuthenticationRequest.RelayState
+		logrus.Infof("Action URL: %s", actionURL)
+		logrus.Infof("SAML Request: %s", samlRequest)
+		logrus.Infof("Relay State: %s", relayState)
 
-		contents := `
+		username := r.Form.Get("username")
+		password := r.Form.Get("password")
+
+		logrus.Infof("Username: %s", username)
+		logrus.Infof("Password: %s", strings.Repeat("*", len(password)))
+
+		if username != "" && password != "" && (validPassword == "" || password == validPassword) {
+			logrus.Infof("Login: rendering the auto form.")
+
+			var samlResponse string // TODO
+
+			contents := `
+<html>
+	<head>
+		<title>SAML Simulator Submit</title>
+		<script>
+window.addEventListener('load', e => {
+	console.log("Page loaded.");
+
+	document.querySelector('#form').submit();
+});
+		</script>
+	</head>
+	<body>
+		<form id="form" method="POST" action="` + html.EscapeString(actionURL) + `">
+			<input name="SAMLResponse" type="hidden" value="` + html.EscapeString(samlResponse) + `">
+			<input name="RelayState" type="hidden" value="` + html.EscapeString(relayState) + `">
+		</form>
+	</body>
+</html>
+		`
+			w.Header().Add("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(contents))
+		} else {
+			logrus.Infof("Login: showing the login screen.")
+
+			var message string
+			if username != "" {
+				if password == "" || (validPassword != "" && password != validPassword) {
+					message = "Invalid username or password."
+				}
+			}
+
+			logrus.Infof("Login: message: %s", message)
+
+			contents := `
 <html>
 	<head>
 		<title>SAML Simulator Login</title>
@@ -163,7 +224,6 @@ body {
 }
 		</style>
 		<script>
-let VALID_PASSWORD = '` + base64.StdEncoding.EncodeToString([]byte(validPassword)) + `';
 window.addEventListener('load', e => {
 	console.log("Page loaded.");
 	for (let element of document.querySelectorAll('input')) {
@@ -178,25 +238,25 @@ window.addEventListener('load', e => {
 		let username = document.querySelector('#username').value;
 		let password = document.querySelector('#password').value;
 		if (username === '') {
-			showError('Please provider a username.');
+			showError('Please provide a username.');
 			return;
 		}
 		if (password === '') {
-			showError('Please provider a password.');
+			showError('Please provide a password.');
 			return;
 		}
-		let encodedPassword = btoa(password);
-		if (VALID_PASSWORD !== '' && encodedPassword != VALID_PASSWORD) {
-			showError('Invalid username or password.');
-			return;
-		}
-
-		showError(false);
 
 		document.querySelector('#submit').disabled = true;
 
 		document.querySelector('#form').submit();
 	});
+`
+			if message != "" {
+				contents += `
+	showMessage('` + strings.ReplaceAll(message, `'`, `\'`) + `');
+			`
+			}
+			contents += `
 });
 
 function showError(message) {
@@ -215,43 +275,46 @@ function showError(message) {
 			This is a SAML simulator, simulating an "identity provider".
 			You may log in with any username.
 `
-		if validPassword == "" {
-			contents += `You may log in with any password.`
-		} else {
-			contents += `The password <tt>` + html.EscapeString(validPassword) + `</tt> will allow you to log in; all other passwords will fail.`
-		}
-		contents += `
+			if validPassword == "" {
+				contents += `The password doesn't matter, as long as it's not empty.`
+			} else {
+				contents += `The password <tt>` + html.EscapeString(validPassword) + `</tt> will allow you to log in; all other passwords will fail.`
+			}
+			contents += `
 		</div>
 		<div class="content">
 			<div class="form">
-				<h2>Login</h2>
-				<div id="login-message" class="banner"></div>
-				<div class="field">
-					<div class="key">Username:</div>
-					<div class="value"><input id="username" type="text" autofocus></div>
-				</div>
-				<div class="field">
-					<div class="key">Password:</div>
-					<div class="value"><input id="password" type="text"></div>
-				</div>
+				<form id="form" method="POST">
+					<input id="SAMLRequest" name="SAMLRequest" type="hidden" value="` + html.EscapeString(samlRequest) + `">
+					<input id="RelayState" name="RelayState" type="hidden" value="` + html.EscapeString(relayState) + `">
+
+					<h2>Login</h2>
+					<div id="login-message" class="banner"></div>
+					<div class="field">
+						<div class="key">Username:</div>
+						<div class="value"><input id="username" name="username" type="text" autofocus></div>
+					</div>
+					<div class="field">
+						<div class="key">Password:</div>
+						<div class="value"><input id="password" name="password" type="text"></div>
+					</div>
+				</form>
 				<div class="actions">
 					<button id="submit">Log in</button>
 				</div>
 			</div>
-			<form id="form" method="POST" action="` + html.EscapeString(actionURL) + `">
-				<input name="SAMLRequest" type="hidden" value="` + html.EscapeString(samlRequest) + `">
-				<input name="RelayState" type="hidden" value="` + html.EscapeString(relayState) + `">
-			</form>
 		</div>
 		<div class="footer">
-			On login, this will POST to: ` + html.EscapeString(actionURL) + `
+			On login, this will POST to: ` + html.EscapeString(actionURL) + `<br>
+			Relay state: ` + html.EscapeString(relayState) + `
 		</div>
 	</body>
 </html>
 		`
-		w.Header().Add("Content-Type", "text/html")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(contents))
+			w.Header().Add("Content-Type", "text/html")
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(contents))
+		}
 	})
 	mux.HandleFunc("/sso2", func(w http.ResponseWriter, r *http.Request) {
 		ssoURL, err := url.Parse("/sso2")

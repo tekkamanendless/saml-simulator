@@ -5,8 +5,8 @@ A SAML simulator to aid in the development and testing of applications that auth
 
 ### `/cert`
 
-### `/logout`
+### `/login`
 
-### `/sso`
+### `/logout`
 
 ### `/sso2`
