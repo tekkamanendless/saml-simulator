@@ -80,10 +80,10 @@ func New() (*Simulator, error) {
 				return
 			*/
 		} else {
-			logrus.Infof("SAML IDP request buffer: %+v", samlIDPAuthenticationRequest.Request)
+			logrus.Infof("SAML IDP request buffer: %s", samlIDPAuthenticationRequest.RequestBuffer)
 			err = samlIDPAuthenticationRequest.Validate()
 			if err != nil {
-				logrus.Errorf("Could not validate IDP request: %v", err)
+				logrus.Warnf("Could not validate IDP request: %v", err)
 			}
 			logrus.Infof("SAML IDP Request:")
 			if samlIDPAuthenticationRequest.ACSEndpoint == nil {
@@ -95,6 +95,39 @@ func New() (*Simulator, error) {
 				logrus.Infof("   * IsDefault: %v", samlIDPAuthenticationRequest.ACSEndpoint.IsDefault)
 				logrus.Infof("   * Location: %v", samlIDPAuthenticationRequest.ACSEndpoint.Location)
 				logrus.Infof("   * ResponseLocation: %v", samlIDPAuthenticationRequest.ACSEndpoint.ResponseLocation)
+			}
+			{
+				logrus.Infof("* Request:")
+				logrus.Infof("   * AssertionConsumerServiceIndex: %s", samlIDPAuthenticationRequest.Request.AssertionConsumerServiceIndex)
+				logrus.Infof("   * AssertionConsumerServiceURL: %s", samlIDPAuthenticationRequest.Request.AssertionConsumerServiceURL)
+				logrus.Infof("   * AttributeConsumingServiceIndex: %s", samlIDPAuthenticationRequest.Request.AttributeConsumingServiceIndex)
+				logrus.Infof("   * Consent: %s", samlIDPAuthenticationRequest.Request.Consent)
+				logrus.Infof("   * Destination: %s", samlIDPAuthenticationRequest.Request.Destination)
+				logrus.Infof("   * ID: %s", samlIDPAuthenticationRequest.Request.ID)
+				logrus.Infof("   * IssueInstant: %v", samlIDPAuthenticationRequest.Request.IssueInstant)
+				logrus.Infof("   * ProtocolBinding: %s", samlIDPAuthenticationRequest.Request.ProtocolBinding)
+				logrus.Infof("   * ProviderName: %s", samlIDPAuthenticationRequest.Request.ProviderName)
+				logrus.Infof("   * Version: %s", samlIDPAuthenticationRequest.Request.Version)
+				logrus.Infof("   * ForceAuthn: %+v", samlIDPAuthenticationRequest.Request.ForceAuthn)
+				logrus.Infof("   * IsPassive: %+v", samlIDPAuthenticationRequest.Request.IsPassive)
+			}
+			if samlIDPAuthenticationRequest.SPSSODescriptor == nil {
+				logrus.Infof("* SPSSODescriptor: n/a")
+			} else {
+				logrus.Infof("* SPSSODescriptor:")
+				logrus.Infof("   * CacheDruration: %v", samlIDPAuthenticationRequest.SPSSODescriptor.CacheDuration)
+				logrus.Infof("   * ErrorURL: %s", samlIDPAuthenticationRequest.SPSSODescriptor.ErrorURL)
+				logrus.Infof("   * ID: %s", samlIDPAuthenticationRequest.SPSSODescriptor.ID)
+				logrus.Infof("   * ProtocolSupportEnumeration: %s", samlIDPAuthenticationRequest.SPSSODescriptor.ProtocolSupportEnumeration)
+			}
+			if samlIDPAuthenticationRequest.ServiceProviderMetadata == nil {
+				logrus.Infof("* ServiceProviderMetadata: n/a")
+			} else {
+				logrus.Infof("* ServiceProviderMetadata:")
+				logrus.Infof("   * CacheDuration: %v", samlIDPAuthenticationRequest.ServiceProviderMetadata.CacheDuration)
+				logrus.Infof("   * EntityID: %s", samlIDPAuthenticationRequest.ServiceProviderMetadata.EntityID)
+				logrus.Infof("   * ID: %s", samlIDPAuthenticationRequest.ServiceProviderMetadata.ID)
+				logrus.Infof("   * ValidUntil: %v", samlIDPAuthenticationRequest.ServiceProviderMetadata.ValidUntil)
 			}
 			logrus.Infof("* Now: %v", samlIDPAuthenticationRequest.Now)
 			logrus.Infof("* RelayState: %v", samlIDPAuthenticationRequest.RelayState)
