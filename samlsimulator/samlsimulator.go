@@ -3,13 +3,16 @@ package samlsimulator
 import (
 	"bytes"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"html"
+	"math/rand"
 	"net/http"
 	"net/url"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/crewjam/saml"
 	"github.com/sirupsen/logrus"
@@ -77,7 +80,24 @@ func New() (*Simulator, error) {
 				return
 			*/
 		} else {
-			//actionURL = samlIDPAuthenticationRequest.IDP.SSOURL.String()
+			logrus.Infof("SAML IDP request buffer: %+v", samlIDPAuthenticationRequest.Request)
+			err = samlIDPAuthenticationRequest.Validate()
+			if err != nil {
+				logrus.Errorf("Could not validate IDP request: %v", err)
+			}
+			logrus.Infof("SAML IDP Request:")
+			if samlIDPAuthenticationRequest.ACSEndpoint == nil {
+				logrus.Infof("* ACSEndpoint: n/a")
+			} else {
+				logrus.Infof("* ACSEndpoint:")
+				logrus.Infof("   * Binding: %v", samlIDPAuthenticationRequest.ACSEndpoint.Binding)
+				logrus.Infof("   * Index: %v", samlIDPAuthenticationRequest.ACSEndpoint.Index)
+				logrus.Infof("   * IsDefault: %v", samlIDPAuthenticationRequest.ACSEndpoint.IsDefault)
+				logrus.Infof("   * Location: %v", samlIDPAuthenticationRequest.ACSEndpoint.Location)
+				logrus.Infof("   * ResponseLocation: %v", samlIDPAuthenticationRequest.ACSEndpoint.ResponseLocation)
+			}
+			logrus.Infof("* Now: %v", samlIDPAuthenticationRequest.Now)
+			logrus.Infof("* RelayState: %v", samlIDPAuthenticationRequest.RelayState)
 			if samlIDPAuthenticationRequest.ACSEndpoint != nil && samlIDPAuthenticationRequest.ACSEndpoint.Location != "" {
 				actionURL = samlIDPAuthenticationRequest.ACSEndpoint.Location
 			}
@@ -98,31 +118,72 @@ func New() (*Simulator, error) {
 		if username != "" && password != "" && (validPassword == "" || password == validPassword) {
 			logrus.Infof("Login: rendering the auto form.")
 
-			var samlResponse string // TODO
+			/*
+							var samlResponse string // TODO
 
-			contents := `
-<html>
-	<head>
-		<title>SAML Simulator Submit</title>
-		<script>
-window.addEventListener('load', e => {
-	console.log("Page loaded.");
+							contents := `
+				<html>
+					<head>
+						<title>SAML Simulator Submit</title>
+						<script>
+				window.addEventListener('load', e => {
+					console.log("Page loaded.");
 
-	document.querySelector('#form').submit();
-});
-		</script>
-	</head>
-	<body>
-		<form id="form" method="POST" action="` + html.EscapeString(actionURL) + `">
-			<input name="SAMLResponse" type="hidden" value="` + html.EscapeString(samlResponse) + `">
-			<input name="RelayState" type="hidden" value="` + html.EscapeString(relayState) + `">
-		</form>
-	</body>
-</html>
-		`
-			w.Header().Add("Content-Type", "text/html")
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(contents))
+					document.querySelector('#form').submit();
+				});
+						</script>
+					</head>
+					<body>
+						<form id="form" method="POST" action="` + html.EscapeString(actionURL) + `">
+							<input name="SAMLResponse" type="hidden" value="` + html.EscapeString(samlResponse) + `">
+							<input name="RelayState" type="hidden" value="` + html.EscapeString(relayState) + `">
+						</form>
+					</body>
+				</html>
+						`
+							w.Header().Add("Content-Type", "text/html")
+							w.WriteHeader(http.StatusOK)
+							w.Write([]byte(contents))
+			*/
+
+			randomSource := rand.NewSource(time.Now().Unix())
+			randomReader := rand.New(randomSource)
+			sessionID := make([]byte, 32)
+			randomReader.Read(sessionID)
+			sessionIndex := make([]byte, 32)
+			randomReader.Read(sessionIndex)
+			maxAge := 1 * time.Hour
+			newSession := &saml.Session{
+				ID:         base64.StdEncoding.EncodeToString(sessionID),
+				NameID:     username,
+				CreateTime: saml.TimeNow(),
+				ExpireTime: saml.TimeNow().Add(maxAge),
+				Index:      hex.EncodeToString(sessionIndex),
+				UserName:   username,
+				//Groups:                user.Groups[:],
+				//UserEmail:             user.Email,
+				//UserCommonName:        user.CommonName,
+				//UserSurname:           user.Surname,
+				//UserGivenName:         user.GivenName,
+				//UserScopedAffiliation: user.ScopedAffiliation,
+			}
+
+			assertionMaker := samlIDPAuthenticationRequest.IDP.AssertionMaker
+			if assertionMaker == nil {
+				assertionMaker = saml.DefaultAssertionMaker{}
+			}
+			if err := assertionMaker.MakeAssertion(samlIDPAuthenticationRequest, newSession); err != nil {
+				logrus.Errorf("Failed to make assertion: %s", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+				return
+			}
+			if err := samlIDPAuthenticationRequest.WriteResponse(w); err != nil {
+				logrus.Errorf("Failed to write response: %s", err)
+				w.WriteHeader(http.StatusInternalServerError)
+				w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+				return
+			}
 		} else {
 			logrus.Infof("Login: showing the login screen.")
 
