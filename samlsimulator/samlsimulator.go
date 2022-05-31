@@ -1,18 +1,14 @@
 package samlsimulator
 
 import (
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
+	"bytes"
 	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"html"
-	"math/big"
 	"net/http"
 	"net/url"
 	"sort"
-	"time"
 
 	"github.com/crewjam/saml"
 	"github.com/sirupsen/logrus"
@@ -32,16 +28,6 @@ func New() (*Simulator, error) {
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-		err := r.ParseForm()
-		if err != nil {
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
-		}
-
-		w.Header().Add("Location", "/ui/login?"+r.URL.Query().Encode())
-		w.WriteHeader(http.StatusTemporaryRedirect)
-	})
 	mux.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
 		err := r.ParseForm()
 		if err != nil {
@@ -51,7 +37,7 @@ func New() (*Simulator, error) {
 
 		// TODO TODO TODO
 	})
-	mux.HandleFunc("/ui/login", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/sso", func(w http.ResponseWriter, r *http.Request) {
 		err := r.ParseForm()
 		if err != nil {
 			w.WriteHeader(http.StatusInternalServerError)
@@ -59,6 +45,34 @@ func New() (*Simulator, error) {
 		}
 
 		validPassword := r.Form.Get("validPassword")
+
+		ssoURL, err := url.Parse("/sso")
+		if err != nil {
+			logrus.Errorf("Could not parse SSO URL: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+			return
+		}
+
+		seed := int64(42)
+		samlIDP, err := createIDP(r, seed, *ssoURL)
+		if err != nil {
+			logrus.Errorf("Could not create IDP: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+			return
+		}
+		samlIDPAuthenticationRequest, err := saml.NewIdpAuthnRequest(samlIDP, r)
+		if err != nil {
+			logrus.Errorf("Could not parse IDP request: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+			return
+		}
+
+		actionURL := samlIDPAuthenticationRequest.IDP.SSOURL.String()
+		samlRequest := base64.StdEncoding.EncodeToString(samlIDPAuthenticationRequest.RequestBuffer)
+		relayState := samlIDPAuthenticationRequest.RelayState
 
 		contents := `
 <html>
@@ -137,6 +151,16 @@ body {
 #login-message {
 	display: none;
 }
+
+.footer {
+	box-sizing: border-box;
+
+	width: 100%;
+
+	padding: 0.5em;
+
+	background-color: gray;
+}
 		</style>
 		<script>
 let VALID_PASSWORD = '` + base64.StdEncoding.EncodeToString([]byte(validPassword)) + `';
@@ -171,7 +195,7 @@ window.addEventListener('load', e => {
 
 		document.querySelector('#submit').disabled = true;
 
-		// TODO TODO TODO
+		document.querySelector('#form').submit();
 	});
 });
 
@@ -214,6 +238,13 @@ function showError(message) {
 					<button id="submit">Log in</button>
 				</div>
 			</div>
+			<form id="form" method="POST" action="` + html.EscapeString(actionURL) + `">
+				<input name="SAMLRequest" type="hidden" value="` + html.EscapeString(samlRequest) + `">
+				<input name="RelayState" type="hidden" value="` + html.EscapeString(relayState) + `">
+			</form>
+		</div>
+		<div class="footer">
+			On login, this will POST to: ` + html.EscapeString(actionURL) + `
 		</div>
 	</body>
 </html>
@@ -222,60 +253,63 @@ function showError(message) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(contents))
 	})
-	mux.HandleFunc("/sso/", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/sso2", func(w http.ResponseWriter, r *http.Request) {
+		ssoURL, err := url.Parse("/sso2")
+		if err != nil {
+			logrus.Errorf("Could not parse SSO URL: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+			return
+		}
+
+		seed := int64(42)
+		samlIDP, err := createIDP(r, seed, *ssoURL)
+		if err != nil {
+			logrus.Errorf("Could not create IDP: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+			return
+		}
+
+		samlIDP.ServeSSO(w, r)
+	})
+	mux.HandleFunc("/cert", func(w http.ResponseWriter, r *http.Request) {
 		ssoURL, err := url.Parse("/sso")
 		if err != nil {
+			logrus.Errorf("Could not parse SSO URL: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
 			return
 		}
 
-		// generate key
-		privatekey, err := rsa.GenerateKey(rand.Reader, 2048)
+		seed := int64(42)
+		samlIDP, err := createIDP(r, seed, *ssoURL)
 		if err != nil {
-			logrus.Errorf("Could not generate RSA key: %v", err)
+			logrus.Errorf("Could not create IDP: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
 			return
 		}
 
-		template := x509.Certificate{
-			SerialNumber: big.NewInt(1),
-			Subject: pkix.Name{
-				Organization: []string{"Example Dot Com"},
-			},
-			NotBefore: time.Now(),
-			NotAfter:  time.Now().Add(365 * 24 * time.Hour),
+		w.Header().Add("Content-Type", "text/plain")
+		w.WriteHeader(http.StatusOK)
+		{
+			buffer := new(bytes.Buffer)
+			pem.Encode(buffer, &pem.Block{
+				Type:  "CERTIFICATE",
+				Bytes: samlIDP.Certificate.Raw,
+			})
+			w.Write(buffer.Bytes())
 
-			KeyUsage:              x509.KeyUsageDigitalSignature | x509.KeyUsageKeyEncipherment,
-			ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-			BasicConstraintsValid: true,
+			/*
+				certPrivKeyPEM := new(bytes.Buffer)
+				pem.Encode(certPrivKeyPEM, &pem.Block{
+					Type:  "RSA PRIVATE KEY",
+					Bytes: x509.MarshalPKCS1PrivateKey(*(samlIDP.Key.(**rsa.PrivateKey))),
+				})
+				w.Write(certPrivKeyPEM.Bytes())
+			*/
 		}
-
-		derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &privatekey.PublicKey, privatekey)
-		if err != nil {
-			logrus.Errorf("Failed to create certificate: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
-			return
-		}
-
-		c, err := x509.ParseCertificate(derBytes)
-		if err != nil {
-			logrus.Errorf("Failed to parse certificate: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
-			return
-		}
-
-		samlIDP := saml.IdentityProvider{
-			Key:         &privatekey,
-			Logger:      logrus.StandardLogger(),
-			Certificate: c,
-			//MetadataURL: metadataURL,
-			SSOURL: *ssoURL,
-		}
-		samlIDP.ServeSSO(w, r)
 	})
 
 	s.handler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
