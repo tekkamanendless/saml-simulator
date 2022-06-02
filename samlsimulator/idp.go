@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"os"
 	"time"
 
 	"github.com/crewjam/saml"
@@ -58,13 +59,69 @@ func createIDP(r *http.Request, seed int64, ssoURL url.URL) (*saml.IdentityProvi
 		return nil, fmt.Errorf("failed to parse certificate: %w", err)
 	}
 
+	serviceProviderProvider := &ServiceProviderProvider{}
+
 	samlIDP := saml.IdentityProvider{
-		Key:         &privatekey,
+		Key:         privatekey,
 		Logger:      logrus.StandardLogger(),
 		Certificate: c,
 		SSOURL:      ssoURL,
 		//MetadataURL: metadataURL, // TODO
 		//LogoutURL: logoutURL, // TODO
+		ServiceProviderProvider: serviceProviderProvider,
 	}
 	return &samlIDP, nil
+}
+
+// ServiceProviderProvider is a simple saml.ServiceProviderProvider that will use an existing
+// SAML request to reverse-engineer a valid service provider.
+type ServiceProviderProvider struct {
+	req *saml.IdpAuthnRequest // This is the SAML request.
+}
+
+// SetRequest sets the SAML request to use to reverse-engineer the metadata.
+//
+// If this is not set, then GetServiceProvider will fail.
+func (s *ServiceProviderProvider) SetRequest(req *saml.IdpAuthnRequest) {
+	s.req = req
+}
+
+// GetServiceProvider returns the Service Provider metadata for the
+// service provider ID, which is typically the service provider's
+// metadata URL. If an appropriate service provider cannot be found then
+// the returned error must be os.ErrNotExist.
+//
+// This cheats by using the SAML request to reverse-engineer some valid metadata
+// that exactly matches what was provided.
+//
+// Please ensure that your call SetRequest before using this.
+func (s *ServiceProviderProvider) GetServiceProvider(r *http.Request, serviceProviderID string) (*saml.EntityDescriptor, error) {
+	// If we don't have the request, then fail.
+	if s.req == nil {
+		return nil, os.ErrNotExist
+	}
+
+	// Create a minimal service provider.
+	p := &saml.EntityDescriptor{
+		EntityID:         "",                       // We'll fill this out later.
+		SPSSODescriptors: []saml.SPSSODescriptor{}, // We'll add to this later.
+		// TODO: What other fields should we fake?
+	}
+	if s.req.Request.Issuer != nil {
+		p.EntityID = s.req.Request.Issuer.Value
+	}
+	if s.req.Request.AssertionConsumerServiceURL != "" {
+		descriptor := saml.SPSSODescriptor{
+			AssertionConsumerServices: []saml.IndexedEndpoint{
+				{
+					Binding:  saml.HTTPPostBinding,                      // The `saml` package only supports the POST binding.
+					Location: s.req.Request.AssertionConsumerServiceURL, // Use the ACS URL.
+				},
+			},
+			// TODO: What other fields should we fake?
+		}
+		p.SPSSODescriptors = append(p.SPSSODescriptors, descriptor)
+	}
+
+	return p, nil
 }

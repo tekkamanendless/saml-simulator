@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/pem"
+	"encoding/xml"
 	"fmt"
 	"html"
 	"math/rand"
@@ -40,6 +41,8 @@ func New() (*Simulator, error) {
 		}
 
 		// TODO TODO TODO
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("TODO"))
 	})
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		err := r.ParseForm()
@@ -50,7 +53,15 @@ func New() (*Simulator, error) {
 
 		validPassword := r.Form.Get("validPassword")
 
-		ssoURL, err := url.Parse("/login")
+		logrus.Infof("HTTP request")
+		logrus.Infof("* Method: %s", r.Method)
+		logrus.Infof("* Host: %s", r.Host)
+		logrus.Infof("* RequestURI: %s", r.RequestURI)
+		logrus.Infof("* URL: %s", r.URL)
+
+		var message string
+
+		ssoURL, err := url.Parse("https://" + r.Host + "/login")
 		if err != nil {
 			logrus.Errorf("Could not parse SSO URL: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
@@ -67,12 +78,13 @@ func New() (*Simulator, error) {
 			return
 		}
 
-		actionURL := "https://bad-saml-target.example.com/sorry"
+		var actionURL string
 		var samlRequest string
 		var relayState string
 		samlIDPAuthenticationRequest, err := saml.NewIdpAuthnRequest(samlIDP, r)
 		if err != nil {
 			logrus.Warnf("Could not parse IDP request: %v", err)
+			message = err.Error()
 			/*
 				logrus.Errorf("Could not parse IDP request: %v", err)
 				w.WriteHeader(http.StatusInternalServerError)
@@ -80,20 +92,54 @@ func New() (*Simulator, error) {
 				return
 			*/
 		} else {
+			// Set up the SSO URL in advance.
+			{
+				var ar saml.AuthnRequest
+				err := xml.Unmarshal(samlIDPAuthenticationRequest.RequestBuffer, &ar)
+				if err != nil {
+					logrus.Warnf("Could not parse XML: %v", err)
+				} else {
+					u, err := url.Parse(ar.Destination)
+					if err != nil {
+						logrus.Warnf("Could not parse Destination URL: %v", err)
+					} else {
+						samlIDP.SSOURL = *u
+					}
+				}
+			}
+
+			if sp, ok := samlIDP.ServiceProviderProvider.(*ServiceProviderProvider); ok {
+				sp.SetRequest(samlIDPAuthenticationRequest)
+			} else {
+				logrus.Warnf("ServiceProviderProvider is the wrong type: %T", samlIDP.ServiceProviderProvider)
+			}
+
 			logrus.Infof("SAML IDP request buffer: %s", samlIDPAuthenticationRequest.RequestBuffer)
-			err = samlIDPAuthenticationRequest.Validate()
-			if err != nil {
-				logrus.Warnf("Could not validate IDP request: %v", err)
+			if samlIDPAuthenticationRequest.IDP == nil {
+				logrus.Infof("* IDP: n/a")
+			} else {
+				logrus.Infof("* IDP:")
+				logrus.Infof("   * LogoutURL: %s", &samlIDPAuthenticationRequest.IDP.LogoutURL)
+				logrus.Infof("   * MetadataURL: %s", &samlIDPAuthenticationRequest.IDP.MetadataURL)
+				logrus.Infof("   * SSOURL: %s", &samlIDPAuthenticationRequest.IDP.SSOURL)
+				logrus.Infof("   * ServiceProviderProvider: %v", samlIDPAuthenticationRequest.IDP.ServiceProviderProvider)
+			}
+			if true {
+				err = samlIDPAuthenticationRequest.Validate()
+				if err != nil {
+					logrus.Warnf("Could not validate IDP request: %v", err)
+					message = err.Error()
+				}
 			}
 			logrus.Infof("SAML IDP Request:")
 			if samlIDPAuthenticationRequest.ACSEndpoint == nil {
 				logrus.Infof("* ACSEndpoint: n/a")
 			} else {
 				logrus.Infof("* ACSEndpoint:")
-				logrus.Infof("   * Binding: %v", samlIDPAuthenticationRequest.ACSEndpoint.Binding)
-				logrus.Infof("   * Index: %v", samlIDPAuthenticationRequest.ACSEndpoint.Index)
+				logrus.Infof("   * Binding: %s", samlIDPAuthenticationRequest.ACSEndpoint.Binding)
+				logrus.Infof("   * Index: %d", samlIDPAuthenticationRequest.ACSEndpoint.Index)
 				logrus.Infof("   * IsDefault: %v", samlIDPAuthenticationRequest.ACSEndpoint.IsDefault)
-				logrus.Infof("   * Location: %v", samlIDPAuthenticationRequest.ACSEndpoint.Location)
+				logrus.Infof("   * Location: %s", samlIDPAuthenticationRequest.ACSEndpoint.Location)
 				logrus.Infof("   * ResponseLocation: %v", samlIDPAuthenticationRequest.ACSEndpoint.ResponseLocation)
 			}
 			{
@@ -110,6 +156,12 @@ func New() (*Simulator, error) {
 				logrus.Infof("   * Version: %s", samlIDPAuthenticationRequest.Request.Version)
 				logrus.Infof("   * ForceAuthn: %+v", samlIDPAuthenticationRequest.Request.ForceAuthn)
 				logrus.Infof("   * IsPassive: %+v", samlIDPAuthenticationRequest.Request.IsPassive)
+				if samlIDPAuthenticationRequest.Request.Issuer == nil {
+					logrus.Infof("   * Issuer: n/a")
+				} else {
+					logrus.Infof("   * Issuer:")
+					logrus.Infof("      * Value: %s", samlIDPAuthenticationRequest.Request.Issuer.Value)
+				}
 			}
 			if samlIDPAuthenticationRequest.SPSSODescriptor == nil {
 				logrus.Infof("* SPSSODescriptor: n/a")
@@ -148,88 +200,92 @@ func New() (*Simulator, error) {
 		logrus.Infof("Username: %s", username)
 		logrus.Infof("Password: %s", strings.Repeat("*", len(password)))
 
-		if username != "" && password != "" && (validPassword == "" || password == validPassword) {
-			logrus.Infof("Login: rendering the auto form.")
+		// If we don't have an error message already, then attempt to validate the username/password.
+		if message == "" {
+			if username != "" && password != "" && (validPassword == "" || password == validPassword) {
+				logrus.Infof("Login: rendering the auto form.")
 
-			/*
-							var samlResponse string // TODO
+				/*
+								var samlResponse string // TODO
 
-							contents := `
-				<html>
-					<head>
-						<title>SAML Simulator Submit</title>
-						<script>
-				window.addEventListener('load', e => {
-					console.log("Page loaded.");
+								contents := `
+					<html>
+						<head>
+							<title>SAML Simulator Submit</title>
+							<script>
+					window.addEventListener('load', e => {
+						console.log("Page loaded.");
 
-					document.querySelector('#form').submit();
-				});
-						</script>
-					</head>
-					<body>
-						<form id="form" method="POST" action="` + html.EscapeString(actionURL) + `">
-							<input name="SAMLResponse" type="hidden" value="` + html.EscapeString(samlResponse) + `">
-							<input name="RelayState" type="hidden" value="` + html.EscapeString(relayState) + `">
-						</form>
-					</body>
-				</html>
-						`
-							w.Header().Add("Content-Type", "text/html")
-							w.WriteHeader(http.StatusOK)
-							w.Write([]byte(contents))
-			*/
+						document.querySelector('#form').submit();
+					});
+							</script>
+						</head>
+						<body>
+							<form id="form" method="POST" action="` + html.EscapeString(actionURL) + `">
+								<input name="SAMLResponse" type="hidden" value="` + html.EscapeString(samlResponse) + `">
+								<input name="RelayState" type="hidden" value="` + html.EscapeString(relayState) + `">
+							</form>
+						</body>
+					</html>
+							`
+								w.Header().Add("Content-Type", "text/html")
+								w.WriteHeader(http.StatusOK)
+								w.Write([]byte(contents))
+				*/
 
-			randomSource := rand.NewSource(time.Now().Unix())
-			randomReader := rand.New(randomSource)
-			sessionID := make([]byte, 32)
-			randomReader.Read(sessionID)
-			sessionIndex := make([]byte, 32)
-			randomReader.Read(sessionIndex)
-			maxAge := 1 * time.Hour
-			newSession := &saml.Session{
-				ID:         base64.StdEncoding.EncodeToString(sessionID),
-				NameID:     username,
-				CreateTime: saml.TimeNow(),
-				ExpireTime: saml.TimeNow().Add(maxAge),
-				Index:      hex.EncodeToString(sessionIndex),
-				UserName:   username,
-				//Groups:                user.Groups[:],
-				//UserEmail:             user.Email,
-				//UserCommonName:        user.CommonName,
-				//UserSurname:           user.Surname,
-				//UserGivenName:         user.GivenName,
-				//UserScopedAffiliation: user.ScopedAffiliation,
-			}
-
-			assertionMaker := samlIDPAuthenticationRequest.IDP.AssertionMaker
-			if assertionMaker == nil {
-				assertionMaker = saml.DefaultAssertionMaker{}
-			}
-			if err := assertionMaker.MakeAssertion(samlIDPAuthenticationRequest, newSession); err != nil {
-				logrus.Errorf("Failed to make assertion: %s", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
-				return
-			}
-			if err := samlIDPAuthenticationRequest.WriteResponse(w); err != nil {
-				logrus.Errorf("Failed to write response: %s", err)
-				w.WriteHeader(http.StatusInternalServerError)
-				w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
-				return
-			}
-		} else {
-			logrus.Infof("Login: showing the login screen.")
-
-			var message string
-			if username != "" {
-				if password == "" || (validPassword != "" && password != validPassword) {
-					message = "Invalid username or password."
+				randomSource := rand.NewSource(time.Now().Unix())
+				randomReader := rand.New(randomSource)
+				sessionID := make([]byte, 32)
+				randomReader.Read(sessionID)
+				sessionIndex := make([]byte, 32)
+				randomReader.Read(sessionIndex)
+				maxAge := 1 * time.Hour
+				newSession := &saml.Session{
+					ID:         base64.StdEncoding.EncodeToString(sessionID),
+					NameID:     username,
+					CreateTime: saml.TimeNow(),
+					ExpireTime: saml.TimeNow().Add(maxAge),
+					Index:      hex.EncodeToString(sessionIndex),
+					UserName:   username,
+					//Groups:                user.Groups[:],
+					//UserEmail:             user.Email,
+					//UserCommonName:        user.CommonName,
+					//UserSurname:           user.Surname,
+					//UserGivenName:         user.GivenName,
+					//UserScopedAffiliation: user.ScopedAffiliation,
 				}
+
+				assertionMaker := samlIDPAuthenticationRequest.IDP.AssertionMaker
+				if assertionMaker == nil {
+					assertionMaker = saml.DefaultAssertionMaker{}
+				}
+				if err := assertionMaker.MakeAssertion(samlIDPAuthenticationRequest, newSession); err != nil {
+					logrus.Errorf("Failed to make assertion: %s", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+					return
+				}
+				if err := samlIDPAuthenticationRequest.WriteResponse(w); err != nil {
+					logrus.Errorf("Failed to write response: %s", err)
+					w.WriteHeader(http.StatusInternalServerError)
+					w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+					return
+				}
+				return
 			}
+		}
 
-			logrus.Infof("Login: message: %s", message)
+		logrus.Infof("Login: showing the login screen.")
 
-			contents := `
+		if username != "" {
+			if password == "" || (validPassword != "" && password != validPassword) {
+				message = "Invalid username or password."
+			}
+		}
+
+		logrus.Infof("Login: message: %s", message)
+
+		contents := `
 <html>
 	<head>
 		<title>SAML Simulator Login</title>
@@ -239,6 +295,8 @@ html, body {
 	padding: 0;
 	width: 100%;
 	height: 100%;
+
+	font-family: Roboto, sans-serif;
 }
 
 body {
@@ -249,6 +307,20 @@ body {
 	align-content: center;
 
 	background-color: black;
+}
+
+input {
+	box-sizing: border-box;
+	display: block;
+	border-radius: 0.6em;
+	padding: 0.5em;
+	min-width: 200px;
+	font-size: 1.1em;
+	margin: auto;
+}
+
+button {
+	border-radius: 0.6em;
 }
 
 .banner {
@@ -282,15 +354,10 @@ body {
 }
 
 .field {
-	display: flex;
-	flex-direction: row;
 	padding: 0.5em;
 }
-.field .key {
-	width: 100px;
-}
 .field .value {
-	flex: 1;
+	margin: auto;
 }
 
 .actions {
@@ -345,12 +412,12 @@ window.addEventListener('load', e => {
 		document.querySelector('#form').submit();
 	});
 `
-			if message != "" {
-				contents += `
-	showMessage('` + strings.ReplaceAll(message, `'`, `\'`) + `');
-			`
-			}
+		if message != "" {
 			contents += `
+	showError('` + strings.ReplaceAll(message, `'`, `\'`) + `');
+			`
+		}
+		contents += `
 });
 
 function showError(message) {
@@ -369,12 +436,12 @@ function showError(message) {
 			This is a SAML simulator, simulating an "identity provider".
 			You may log in with any username.
 `
-			if validPassword == "" {
-				contents += `The password doesn't matter, as long as it's not empty.`
-			} else {
-				contents += `The password <tt>` + html.EscapeString(validPassword) + `</tt> will allow you to log in; all other passwords will fail.`
-			}
-			contents += `
+		if validPassword == "" {
+			contents += `The password doesn't matter, as long as it's not empty.`
+		} else {
+			contents += `The password <tt>` + html.EscapeString(validPassword) + `</tt> will allow you to log in; all other passwords will fail.`
+		}
+		contents += `
 		</div>
 		<div class="content">
 			<div class="form">
@@ -385,12 +452,10 @@ function showError(message) {
 					<h2>Login</h2>
 					<div id="login-message" class="banner"></div>
 					<div class="field">
-						<div class="key">Username:</div>
-						<div class="value"><input id="username" name="username" type="text" autofocus></div>
+						<div class="value"><input id="username" name="username" type="text" placeholder="Username" autofocus></div>
 					</div>
 					<div class="field">
-						<div class="key">Password:</div>
-						<div class="value"><input id="password" name="password" type="text"></div>
+						<div class="value"><input id="password" name="password" placeholder="Password" type="password"></div>
 					</div>
 				</form>
 				<div class="actions">
@@ -399,19 +464,30 @@ function showError(message) {
 			</div>
 		</div>
 		<div class="footer">
-			On login, this will POST to: ` + html.EscapeString(actionURL) + `<br>
-			Relay state: ` + html.EscapeString(relayState) + `
+			On login, this will POST to: `
+		if actionURL == "" {
+			contents += `n/a`
+		} else {
+			contents += html.EscapeString(actionURL)
+		}
+		contents += `<br>
+			Relay state: `
+		if relayState == "" {
+			contents += `n/a`
+		} else {
+			contents += html.EscapeString(relayState)
+		}
+		contents += `<br>
 		</div>
 	</body>
 </html>
 		`
-			w.Header().Add("Content-Type", "text/html")
-			w.WriteHeader(http.StatusOK)
-			w.Write([]byte(contents))
-		}
+		w.Header().Add("Content-Type", "text/html")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(contents))
 	})
-	mux.HandleFunc("/sso2", func(w http.ResponseWriter, r *http.Request) {
-		ssoURL, err := url.Parse("/sso2")
+	mux.HandleFunc("/sso", func(w http.ResponseWriter, r *http.Request) {
+		ssoURL, err := url.Parse("https://" + r.Host + "/sso")
 		if err != nil {
 			logrus.Errorf("Could not parse SSO URL: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)

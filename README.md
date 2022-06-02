@@ -18,6 +18,6 @@ Upon success, it will render a simple page with a single form and use Javascript
 ### `/logout`
 TODO: THIS
 
-### `/sso2`
+### `/sso`
 This is a test endpoint for the built-in IDP.
 This will likely be kind of good, but not quite good enough for our use case.
