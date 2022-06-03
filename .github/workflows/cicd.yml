@@ -35,7 +35,7 @@ jobs:
         run: mkdir -p build && go build -o build/saml-simulator${{ matrix.ext }} cmd/saml-simulator/*
       - name: Test
         run: go test ./...
-  docker:
+  docker_build:
     runs-on: ubuntu-latest
     env:
       CGO_ENABLED: 0
@@ -52,3 +52,9 @@ jobs:
         run: mkdir -p build && go build -o build/saml-simulator cmd/saml-simulator/*
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v2
+      - name: Build
+        uses: docker/build-push-action@v3
+        with:
+          context: .
+          push: false
+          tags: tekkamanendless/saml-simulator:latest
