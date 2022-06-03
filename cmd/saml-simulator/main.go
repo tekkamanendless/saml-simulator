@@ -5,17 +5,61 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strconv"
 
 	"github.com/sirupsen/logrus"
 	"github.com/tekkamanendless/saml-simulator/samlsimulator"
 )
 
+// EnvOrBool returns the value of the environment variable; if not present or
+// otherwise invalid, this returns the default value given.
+func EnvOrBool(name string, defaultValue bool) bool {
+	value := os.Getenv(name)
+	if value == "" {
+		return defaultValue
+	}
+
+	v, err := strconv.ParseBool(value)
+	if err != nil {
+		logrus.Warnf("Could not parse %s: %v", name, err)
+		return defaultValue
+	}
+	return v
+}
+
+// EnvOrInt returns the value of the environment variable; if not present or
+// otherwise invalid, this returns the default value given.
+func EnvOrInt(name string, defaultValue int) int {
+	value := os.Getenv(name)
+	if value == "" {
+		return defaultValue
+	}
+
+	v, err := strconv.ParseInt(value, 10, 64)
+	if err != nil {
+		logrus.Warnf("Could not parse %s: %v", name, err)
+		return defaultValue
+	}
+	return int(v)
+}
+
+// EnvOrString returns the value of the environment variable; if not present or
+// otherwise invalid, this returns the default value given.
+func EnvOrString(name string, defaultValue string) string {
+	value := os.Getenv(name)
+	if value == "" {
+		return defaultValue
+	}
+
+	return value
+}
+
 func main() {
-	debug := flag.Bool("debug", false, "Enable this for more verbose output.")
-	webAddress := flag.String("web.address", "0.0.0.0", "The address to listen on.")
-	webPort := flag.Int("web.port", 8080, "The port number to listen on.")
-	webSSLCertFile := flag.String("web.ssl-cert", "", "The path to the SSL cert file.  Both this and 'web.ssl-key' must be present for HTTPS.")
-	webSSLKeyFile := flag.String("web.ssl-key", "", "The path to the SSL key file.  Both this and 'web.ssl-cert' must be present for HTTPS.")
+	debug := flag.Bool("debug", EnvOrBool("DEBUG", false), "Enable this for more verbose output.\nEnvironment variable: DEBUG")
+	webAddress := flag.String("web.address", EnvOrString("WEB_ADDRESS", "0.0.0.0"), "The address to listen on.\nEnvironment variable: WEB_ADDRESS")
+	webPort := flag.Int("web.port", EnvOrInt("WEB_PORT", 8080), "The port number to listen on.\nEnvironment variable: WEB_PORT")
+	webSSLCertFile := flag.String("web.ssl-cert", EnvOrString("WEB_SSL_CERT", ""), "The path to the SSL cert file.\nBoth this and 'web.ssl-key' must be present for HTTPS.\nEnvironment variable: WEB_SSL_CERT")
+	webSSLKeyFile := flag.String("web.ssl-key", EnvOrString("WEB_SSL_KEY", ""), "The path to the SSL key file.\nBoth this and 'web.ssl-cert' must be present for HTTPS.\nEnvironment variable: WEB_SSL_KEY")
 	flag.Parse()
 
 	if *debug {
