@@ -289,6 +289,7 @@ func New() (*Simulator, error) {
 <html>
 	<head>
 		<title>SAML Simulator Login</title>
+		<meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, minimum-scale=0.5, maximum-scale=3.0, user-scalable=yes">
 		<style>
 html, body {
 	margin: 0;
@@ -309,12 +310,12 @@ body {
 	background-color: black;
 }
 
-input {
+input, button {
 	box-sizing: border-box;
 	display: block;
 	border-radius: 0.6em;
 	padding: 0.5em;
-	min-width: 200px;
+	width: 220px;
 	font-size: 1.1em;
 	margin: auto;
 }
@@ -382,6 +383,7 @@ button {
 	padding: 0.5em;
 
 	background-color: gray;
+	overflow-x: auto;
 }
 		</style>
 		<script>
@@ -458,8 +460,8 @@ function showError(message) {
 						<div class="value"><input id="password" name="password" placeholder="Password" type="password"></div>
 					</div>
 				</form>
-				<div class="actions">
-					<button id="submit">Log in</button>
+				<div class="field">
+					<div class="value"><button id="submit">Log in</button></div>
 				</div>
 			</div>
 		</div>
