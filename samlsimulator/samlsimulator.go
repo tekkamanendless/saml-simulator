@@ -40,9 +40,8 @@ func New() (*Simulator, error) {
 			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
 		}
 
-		// TODO TODO TODO
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("TODO"))
+		w.Write([]byte("You have been logged out."))
 	})
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		err := r.ParseForm()
@@ -535,15 +534,6 @@ function showError(message) {
 				Bytes: samlIDP.Certificate.Raw,
 			})
 			w.Write(buffer.Bytes())
-
-			/*
-				certPrivKeyPEM := new(bytes.Buffer)
-				pem.Encode(certPrivKeyPEM, &pem.Block{
-					Type:  "RSA PRIVATE KEY",
-					Bytes: x509.MarshalPKCS1PrivateKey(*(samlIDP.Key.(**rsa.PrivateKey))),
-				})
-				w.Write(certPrivKeyPEM.Bytes())
-			*/
 		}
 	})
 
