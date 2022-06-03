@@ -9,6 +9,17 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        os: [linux, darwin, windows]
+        arch: [amd64]
+        include:
+          - os: linux
+            ext: ""
+          - os: darwin
+            ext: .app
+          - os: windows
+            ext: .exe
     steps:
       - uses: actions/checkout@v2
       - name: Setup Go
@@ -16,9 +27,11 @@ jobs:
         with:
           go-version: '1.17.11'
       - name: Build
-        run: mkdir build && go build -o build/saml-simulator cmd/saml-simulator/*
+        run: mkdir build && go build -o build/saml-simulator${{ matrix.ext }} cmd/saml-simulator/*
       - name: Test
         env:
           CGO_ENABLED: 0
+          GOOS: ${{ matrix.os }}
+          GOARCH: ${{ matris.arch }}
         run: go test ./...
 
