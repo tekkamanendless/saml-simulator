@@ -19,6 +19,6 @@ jobs:
         run: mkdir build && go build -o build/saml-simulator cmd/saml-simulator/*
       - name: Test
         env:
-          CGO_ENABLED=0
+          CGO_ENABLED: 0
         run: go test ./...
 
