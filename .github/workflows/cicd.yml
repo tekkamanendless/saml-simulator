@@ -32,6 +32,6 @@ jobs:
         env:
           CGO_ENABLED: 0
           GOOS: ${{ matrix.os }}
-          GOARCH: ${{ matris.arch }}
+          GOARCH: ${{ matrix.arch }}
         run: go test ./...
 
