@@ -33,6 +33,43 @@ func New() (*Simulator, error) {
 	}
 
 	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		contents := `
+<html>
+	<head>
+		<title>SAML Simulator Login</title>
+		<meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, minimum-scale=0.5, maximum-scale=3.0, user-scalable=yes">
+		<style>
+html, body {
+	margin: 0;
+	padding: 0;
+	width: 100%;
+	height: 100%;
+
+	font-family: Roboto, sans-serif;
+}
+		</style>
+	</head>
+	<body>
+		<h1>SAML Simulator</h1>
+		<ul>
+			<li>
+				<a href="/">/</a> - This page.
+			</li>
+			<li>
+				<a href="/login">/login</a> - The SAML login page.
+				This accepts <tt>SAMLRequest</tt> and <tt>RelayState</tt> via HTTP GET (redirect) or POST.
+			</li>
+			<li>
+				<a href="/logout">/logout</a> - This SAML logout page.
+			</li>
+		</ul>
+	</body>
+</html>
+		`
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(contents))
+	})
 	mux.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
 		err := r.ParseForm()
 		if err != nil {

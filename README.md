@@ -35,6 +35,9 @@ You may configure the application using any of the following command-line parame
 ## Endpoints
 This web service provides the following endpoints.
 
+### `/`
+This shows some information about how to use the simulator.
+
 ### `/cert`
 This will return a plaintext copy of the cert that will be used.
 
