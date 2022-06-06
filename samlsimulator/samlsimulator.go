@@ -48,13 +48,21 @@ html, body {
 
 	font-family: Roboto, sans-serif;
 }
+
+body {
+	padding: 1em;
+}
 		</style>
 	</head>
 	<body>
 		<h1>SAML Simulator</h1>
+		<h2>Identity Provider</h2>
 		<ul>
 			<li>
 				<a href="/">/</a> - This page.
+			</li>
+			<li>
+				<a href="/cert">/cert</a> - The RSA certificate that will be used to sign the SAML response.
 			</li>
 			<li>
 				<a href="/login">/login</a> - The SAML login page.
@@ -203,7 +211,7 @@ html, body {
 				logrus.Infof("* SPSSODescriptor: n/a")
 			} else {
 				logrus.Infof("* SPSSODescriptor:")
-				logrus.Infof("   * CacheDruration: %v", samlIDPAuthenticationRequest.SPSSODescriptor.CacheDuration)
+				logrus.Infof("   * CacheDuration: %v", samlIDPAuthenticationRequest.SPSSODescriptor.CacheDuration)
 				logrus.Infof("   * ErrorURL: %s", samlIDPAuthenticationRequest.SPSSODescriptor.ErrorURL)
 				logrus.Infof("   * ID: %s", samlIDPAuthenticationRequest.SPSSODescriptor.ID)
 				logrus.Infof("   * ProtocolSupportEnumeration: %s", samlIDPAuthenticationRequest.SPSSODescriptor.ProtocolSupportEnumeration)
