@@ -252,6 +252,8 @@ body {
 			logrus.Infof("* RelayState: %v", samlIDPAuthenticationRequest.RelayState)
 			if samlIDPAuthenticationRequest.ACSEndpoint != nil && samlIDPAuthenticationRequest.ACSEndpoint.Location != "" {
 				actionURL = samlIDPAuthenticationRequest.ACSEndpoint.Location
+			} else {
+				message = "Could not determine the action URL"
 			}
 			samlRequest = base64.StdEncoding.EncodeToString(samlIDPAuthenticationRequest.RequestBuffer)
 			relayState = samlIDPAuthenticationRequest.RelayState
@@ -317,35 +319,39 @@ body {
 						w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
 						return
 					}
-				} else {
-					// Our version of the form will also show some text to make it clear to the user that
-					// we're waiting on the service provider.
+					return
+				}
 
-					var samlResponse string
-					// The code to get the SAML response has been copied from the `saml` package.
-					// See: https://github.com/crewjam/saml/blob/60a32b32095ab361c827116afd3f0041874c6c9c/identity_provider.go#L880
-					{
-						if samlIDPAuthenticationRequest.ResponseEl == nil {
-							if err := samlIDPAuthenticationRequest.MakeResponse(); err != nil {
-								logrus.Errorf("Failed to create response: %s", err)
-								w.WriteHeader(http.StatusInternalServerError)
-								w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
-								return
-							}
-						}
+				// Our version of the form will also show some text to make it clear to the user that
+				// we're waiting on the service provider.
 
-						doc := etree.NewDocument()
-						doc.SetRoot(samlIDPAuthenticationRequest.ResponseEl)
-						responseBuf, err := doc.WriteToBytes()
-						if err != nil {
-							logrus.Errorf("Failed to write response buffer: %s", err)
+				var samlResponse string
+				// The code to get the SAML response has been copied from the `saml` package.
+				// See: https://github.com/crewjam/saml/blob/60a32b32095ab361c827116afd3f0041874c6c9c/identity_provider.go#L880
+				{
+					if samlIDPAuthenticationRequest.ResponseEl == nil {
+						if err := samlIDPAuthenticationRequest.MakeResponse(); err != nil {
+							logrus.Errorf("Failed to create response: %s", err)
 							w.WriteHeader(http.StatusInternalServerError)
 							w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
 							return
 						}
-						samlResponse = base64.StdEncoding.EncodeToString(responseBuf)
 					}
 
+					doc := etree.NewDocument()
+					doc.SetRoot(samlIDPAuthenticationRequest.ResponseEl)
+					responseBuf, err := doc.WriteToBytes()
+					if err != nil {
+						logrus.Errorf("Failed to write response buffer: %s", err)
+						w.WriteHeader(http.StatusInternalServerError)
+						w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+						return
+					}
+					samlResponse = base64.StdEncoding.EncodeToString(responseBuf)
+				}
+
+				switch samlIDPAuthenticationRequest.ACSEndpoint.Binding {
+				case saml.HTTPPostBinding:
 					contents := `
 <html>
 	<head>
@@ -376,7 +382,9 @@ window.addEventListener('load', e => {
 	<body>
 		<h1>SAML Simulator</h1>
 		<h2>Identity Provider</h2>
-		Your resonse has been submitted to ` + html.EscapeString(actionURL) + `; please wait...
+		<p>
+			Your resonse has been submitted to ` + html.EscapeString(actionURL) + `; please wait...
+		</p>
 		<form id="form" method="POST" action="` + html.EscapeString(actionURL) + `">
 			<input name="SAMLResponse" type="hidden" value="` + html.EscapeString(samlResponse) + `">
 			<input name="RelayState" type="hidden" value="` + html.EscapeString(relayState) + `">
@@ -387,8 +395,12 @@ window.addEventListener('load', e => {
 					w.Header().Add("Content-Type", "text/html")
 					w.WriteHeader(http.StatusOK)
 					w.Write([]byte(contents))
+					return
+				default:
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(fmt.Sprintf("Unsupported binding: %s", samlIDPAuthenticationRequest.ACSEndpoint.Binding)))
+					return
 				}
-				return
 			}
 		}
 
