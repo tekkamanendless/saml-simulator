@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/beevik/etree"
 	"github.com/crewjam/saml"
 	"github.com/sirupsen/logrus"
 )
@@ -71,6 +72,9 @@ body {
 			<li>
 				<a href="/logout">/logout</a> - This SAML logout page.
 			</li>
+			<li>
+				<a href="/metadata">/metadata</a> - The SAML metadata.
+			</li>
 		</ul>
 	</body>
 </html>
@@ -78,15 +82,34 @@ body {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(contents))
 	})
-	mux.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
-		err := r.ParseForm()
+	mux.HandleFunc("/cert", func(w http.ResponseWriter, r *http.Request) {
+		ssoURL, err := url.Parse("https://" + r.Host + "/login")
 		if err != nil {
+			logrus.Errorf("Could not parse SSO URL: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+			return
 		}
 
+		seed := int64(42)
+		samlIDP, err := createIDP(r, seed, *ssoURL)
+		if err != nil {
+			logrus.Errorf("Could not create IDP: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+			return
+		}
+
+		w.Header().Add("Content-Type", "text/plain")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("You have been logged out."))
+		{
+			buffer := new(bytes.Buffer)
+			pem.Encode(buffer, &pem.Block{
+				Type:  "CERTIFICATE",
+				Bytes: samlIDP.Certificate.Raw,
+			})
+			w.Write(buffer.Bytes())
+		}
 	})
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
 		err := r.ParseForm()
@@ -229,6 +252,8 @@ body {
 			logrus.Infof("* RelayState: %v", samlIDPAuthenticationRequest.RelayState)
 			if samlIDPAuthenticationRequest.ACSEndpoint != nil && samlIDPAuthenticationRequest.ACSEndpoint.Location != "" {
 				actionURL = samlIDPAuthenticationRequest.ACSEndpoint.Location
+			} else {
+				message = "Could not determine the action URL"
 			}
 			samlRequest = base64.StdEncoding.EncodeToString(samlIDPAuthenticationRequest.RequestBuffer)
 			relayState = samlIDPAuthenticationRequest.RelayState
@@ -248,34 +273,6 @@ body {
 		if message == "" {
 			if username != "" && password != "" && (validPassword == "" || password == validPassword) {
 				logrus.Infof("Login: rendering the auto form.")
-
-				/*
-								var samlResponse string // TODO
-
-								contents := `
-					<html>
-						<head>
-							<title>SAML Simulator Submit</title>
-							<script>
-					window.addEventListener('load', e => {
-						console.log("Page loaded.");
-
-						document.querySelector('#form').submit();
-					});
-							</script>
-						</head>
-						<body>
-							<form id="form" method="POST" action="` + html.EscapeString(actionURL) + `">
-								<input name="SAMLResponse" type="hidden" value="` + html.EscapeString(samlResponse) + `">
-								<input name="RelayState" type="hidden" value="` + html.EscapeString(relayState) + `">
-							</form>
-						</body>
-					</html>
-							`
-								w.Header().Add("Content-Type", "text/html")
-								w.WriteHeader(http.StatusOK)
-								w.Write([]byte(contents))
-				*/
 
 				randomSource := rand.NewSource(time.Now().Unix())
 				randomReader := rand.New(randomSource)
@@ -303,19 +300,107 @@ body {
 				if assertionMaker == nil {
 					assertionMaker = saml.DefaultAssertionMaker{}
 				}
-				if err := assertionMaker.MakeAssertion(samlIDPAuthenticationRequest, newSession); err != nil {
+				err = assertionMaker.MakeAssertion(samlIDPAuthenticationRequest, newSession)
+				if err != nil {
 					logrus.Errorf("Failed to make assertion: %s", err)
 					w.WriteHeader(http.StatusInternalServerError)
 					w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
 					return
 				}
-				if err := samlIDPAuthenticationRequest.WriteResponse(w); err != nil {
-					logrus.Errorf("Failed to write response: %s", err)
-					w.WriteHeader(http.StatusInternalServerError)
-					w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+
+				useBuiltinForm := false
+				if useBuiltinForm {
+					// The builtin form works, but there's nothing visible on the page.
+
+					err = samlIDPAuthenticationRequest.WriteResponse(w)
+					if err != nil {
+						logrus.Errorf("Failed to write response: %s", err)
+						w.WriteHeader(http.StatusInternalServerError)
+						w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+						return
+					}
 					return
 				}
-				return
+
+				// Our version of the form will also show some text to make it clear to the user that
+				// we're waiting on the service provider.
+
+				var samlResponse string
+				// The code to get the SAML response has been copied from the `saml` package.
+				// See: https://github.com/crewjam/saml/blob/60a32b32095ab361c827116afd3f0041874c6c9c/identity_provider.go#L880
+				{
+					if samlIDPAuthenticationRequest.ResponseEl == nil {
+						if err := samlIDPAuthenticationRequest.MakeResponse(); err != nil {
+							logrus.Errorf("Failed to create response: %s", err)
+							w.WriteHeader(http.StatusInternalServerError)
+							w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+							return
+						}
+					}
+
+					doc := etree.NewDocument()
+					doc.SetRoot(samlIDPAuthenticationRequest.ResponseEl)
+					responseBuf, err := doc.WriteToBytes()
+					if err != nil {
+						logrus.Errorf("Failed to write response buffer: %s", err)
+						w.WriteHeader(http.StatusInternalServerError)
+						w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+						return
+					}
+					samlResponse = base64.StdEncoding.EncodeToString(responseBuf)
+				}
+
+				switch samlIDPAuthenticationRequest.ACSEndpoint.Binding {
+				case saml.HTTPPostBinding:
+					contents := `
+<html>
+	<head>
+		<title>SAML Simulator Login</title>
+		<meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, minimum-scale=0.5, maximum-scale=3.0, user-scalable=yes">
+		<style>
+html, body {
+	margin: 0;
+	padding: 0;
+	width: 100%;
+	height: 100%;
+
+	font-family: Roboto, sans-serif;
+}
+
+body {
+	padding: 1em;
+}
+		</style>
+		<script>
+window.addEventListener('load', e => {
+	console.log("Page loaded.");
+
+	document.querySelector('#form').submit();
+});
+		</script>
+	</head>
+	<body>
+		<h1>SAML Simulator</h1>
+		<h2>Identity Provider</h2>
+		<p>
+			Your resonse has been submitted to ` + html.EscapeString(actionURL) + `; please wait...
+		</p>
+		<form id="form" method="POST" action="` + html.EscapeString(actionURL) + `">
+			<input name="SAMLResponse" type="hidden" value="` + html.EscapeString(samlResponse) + `">
+			<input name="RelayState" type="hidden" value="` + html.EscapeString(relayState) + `">
+		</form>
+	</body>
+</html>
+`
+					w.Header().Add("Content-Type", "text/html")
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(contents))
+					return
+				default:
+					w.WriteHeader(http.StatusOK)
+					w.Write([]byte(fmt.Sprintf("Unsupported binding: %s", samlIDPAuthenticationRequest.ACSEndpoint.Binding)))
+					return
+				}
 			}
 		}
 
@@ -532,54 +617,64 @@ function showError(message) {
 		w.WriteHeader(http.StatusOK)
 		w.Write([]byte(contents))
 	})
-	mux.HandleFunc("/sso", func(w http.ResponseWriter, r *http.Request) {
-		ssoURL, err := url.Parse("https://" + r.Host + "/sso")
+	mux.HandleFunc("/logout", func(w http.ResponseWriter, r *http.Request) {
+		err := r.ParseForm()
 		if err != nil {
-			logrus.Errorf("Could not parse SSO URL: %v", err)
 			w.WriteHeader(http.StatusInternalServerError)
 			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
-			return
 		}
 
-		seed := int64(42)
-		samlIDP, err := createIDP(r, seed, *ssoURL)
-		if err != nil {
-			logrus.Errorf("Could not create IDP: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
-			return
-		}
+		contents := `
+<html>
+	<head>
+		<title>SAML Simulator Login</title>
+		<meta name="viewport" content="width=device-width, height=device-height, initial-scale=1.0, minimum-scale=0.5, maximum-scale=3.0, user-scalable=yes">
+		<style>
+html, body {
+	margin: 0;
+	padding: 0;
+	width: 100%;
+	height: 100%;
 
-		samlIDP.ServeSSO(w, r)
-	})
-	mux.HandleFunc("/cert", func(w http.ResponseWriter, r *http.Request) {
-		ssoURL, err := url.Parse("/sso")
-		if err != nil {
-			logrus.Errorf("Could not parse SSO URL: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
-			return
-		}
+	font-family: Roboto, sans-serif;
+}
 
-		seed := int64(42)
-		samlIDP, err := createIDP(r, seed, *ssoURL)
-		if err != nil {
-			logrus.Errorf("Could not create IDP: %v", err)
-			w.WriteHeader(http.StatusInternalServerError)
-			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
-			return
-		}
-
-		w.Header().Add("Content-Type", "text/plain")
+body {
+	padding: 1em;
+}
+		</style>
+	</head>
+	<body>
+		<h1>SAML Simulator</h1>
+		<h2>Identity Provider</h2>
+		<p>
+			You have been logged out.
+		</p>
+	</body>
+</html>
+		`
 		w.WriteHeader(http.StatusOK)
-		{
-			buffer := new(bytes.Buffer)
-			pem.Encode(buffer, &pem.Block{
-				Type:  "CERTIFICATE",
-				Bytes: samlIDP.Certificate.Raw,
-			})
-			w.Write(buffer.Bytes())
+		w.Write([]byte(contents))
+	})
+	mux.HandleFunc("/metadata", func(w http.ResponseWriter, r *http.Request) {
+		ssoURL, err := url.Parse("https://" + r.Host + "/login")
+		if err != nil {
+			logrus.Errorf("Could not parse SSO URL: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+			return
 		}
+
+		seed := int64(42)
+		samlIDP, err := createIDP(r, seed, *ssoURL)
+		if err != nil {
+			logrus.Errorf("Could not create IDP: %v", err)
+			w.WriteHeader(http.StatusInternalServerError)
+			w.Write([]byte(fmt.Sprintf("Internal server error: %v", err)))
+			return
+		}
+
+		samlIDP.ServeMetadata(w, r)
 	})
 
 	s.handler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
