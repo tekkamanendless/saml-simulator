@@ -55,9 +55,5 @@ This is the SSO/logout endpoint.
 
 It does nothing but prints that the user has been logged out.
 
-### `/sso`
-(Testing only)
-
-This is a test endpoint for the built-in IDP from `crewjam/saml`.
-This will likely be kind of good, but not quite good enough for our more flexible use cases.
-Anecdotally, the this endpoint requires the service provider information to be pre-configured, and this tool provides no way to do that.
+### `/metadata`
+This returns the SAML metadata for the identity provider.
