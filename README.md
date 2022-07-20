@@ -57,3 +57,6 @@ It does nothing but prints that the user has been logged out.
 
 ### `/metadata`
 This returns the SAML metadata for the identity provider.
+
+### `/metrics`
+If `EXPOSE_METRICS` is `true`, then this contains the Prometheus metrics.

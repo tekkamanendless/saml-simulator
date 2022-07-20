@@ -7,6 +7,7 @@ import (
 	"os"
 	"strconv"
 
+	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 	"github.com/tekkamanendless/saml-simulator/samlsimulator"
 )
@@ -56,6 +57,7 @@ func EnvOrString(name string, defaultValue string) string {
 
 func main() {
 	debug := flag.Bool("debug", EnvOrBool("DEBUG", false), "Enable this for more verbose output.\nEnvironment variable: DEBUG")
+	exposeMetrics := flag.Bool("expose-metrics", EnvOrBool("EXPOSE_METRICS", false), "Enable this to expose Prometheus metrics via '/metrics'.\nEnvironment variable: EXPOSE_METRICS")
 	webAddress := flag.String("web.address", EnvOrString("WEB_ADDRESS", "0.0.0.0"), "The address to listen on.\nEnvironment variable: WEB_ADDRESS")
 	webPort := flag.Int("web.port", EnvOrInt("WEB_PORT", 8080), "The port number to listen on.\nEnvironment variable: WEB_PORT")
 	webSSLCertFile := flag.String("web.ssl-cert", EnvOrString("WEB_SSL_CERT", ""), "The path to the SSL cert file.\nBoth this and 'web.ssl-key' must be present for HTTPS.\nEnvironment variable: WEB_SSL_CERT")
@@ -68,6 +70,7 @@ func main() {
 
 	logrus.Infof("Flags:")
 	logrus.Infof("* debug: %t", *debug)
+	logrus.Infof("* expose-metrics: %t", *exposeMetrics)
 	logrus.Infof("* web.address: %s", *webAddress)
 	logrus.Infof("* web.port: %d", *webPort)
 	logrus.Infof("* web.ssl-cert: %s", *webSSLCertFile)
@@ -75,10 +78,17 @@ func main() {
 
 	listenAddress := fmt.Sprintf("%s:%d", *webAddress, *webPort)
 
-	handler, err := samlsimulator.New()
+	samlSimulator, err := samlsimulator.New()
 	if err != nil {
 		logrus.Errorf("Error: %v", err)
 		os.Exit(1)
+	}
+
+	handler := http.NewServeMux()
+	handler.Handle("/", samlSimulator)
+	if *exposeMetrics {
+		// Add the Prometheus metrics endpoint.
+		handler.Handle("/metrics", promhttp.Handler())
 	}
 
 	if *webSSLCertFile != "" && *webSSLKeyFile != "" {
