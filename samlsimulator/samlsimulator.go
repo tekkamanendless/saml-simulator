@@ -18,6 +18,9 @@ import (
 	"github.com/beevik/etree"
 	"github.com/crewjam/saml"
 	"github.com/sirupsen/logrus"
+	metrics "github.com/slok/go-http-metrics/metrics/prometheus"
+	"github.com/slok/go-http-metrics/middleware"
+	stdmiddleware "github.com/slok/go-http-metrics/middleware/std"
 )
 
 type Simulator struct {
@@ -34,8 +37,11 @@ func New() (*Simulator, error) {
 	}
 
 	mux := http.NewServeMux()
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		contents := `
+		switch r.URL.Path {
+		case "/":
+			contents := `
 <html>
 	<head>
 		<title>SAML Simulator Login</title>
@@ -79,8 +85,14 @@ body {
 	</body>
 </html>
 		`
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(contents))
+			w.WriteHeader(http.StatusOK)
+			w.Write([]byte(contents))
+			return
+		default:
+			w.WriteHeader(http.StatusNotFound)
+			w.Write([]byte("Not found"))
+			return
+		}
 	})
 	mux.HandleFunc("/cert", func(w http.ResponseWriter, r *http.Request) {
 		ssoURL, err := url.Parse("https://" + r.Host + "/login")
@@ -677,7 +689,9 @@ body {
 		samlIDP.ServeMetadata(w, r)
 	})
 
-	s.handler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	// Wrap the main server mux so that we log every request.
+	logHandler := http.NewServeMux()
+	logHandler.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		ctx := r.Context()
 
 		logrus.WithContext(ctx).Infof("Request: %s %s", r.Method, r.URL)
@@ -701,5 +715,17 @@ body {
 
 		mux.ServeHTTP(w, r)
 	})
+
+	// Wrap the log handler in the metrics monitor.
+
+	// Create our middleware factory.
+	metricsMiddleware := middleware.New(middleware.Config{
+		Recorder: metrics.NewRecorder(metrics.Config{}),
+	})
+	// Wrap our handler with the middleware.
+	statsHandler := stdmiddleware.Handler("", metricsMiddleware, logHandler)
+
+	// Wrap everything in the main handler.
+	s.handler.Handle("/", statsHandler)
 	return s, nil
 }
